@@ -1,0 +1,282 @@
+---
+title: "Impact of Severe Weather Events on Public Health & Economy of USA States"
+author: "Mr Anthony Macey"
+date: "18 November 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Introduction
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.
+
+# Synopsis
+The National Oceanic and Atmospheric Administration (NOAA) maintains a public database for storm events. The data contains the type of storm event, details like location, date, estimates for damage to property as well as the number of human victims of the storm. This report investigates which type of events are the most harmful to the population in terms of both injuries and financially.
+
+# Conclusion
+The conclusion is that the impact on humans, be it injuries or fatalities, isn't directly correlated to the economic impact. 
+
+1. Tornado's cause the most injuries.
+2. Excessive Heat causes the most deaths.
+3. Flooding causes the economic damage. 
+
+  
+## Required Packages
+Package  | Description       
+------------- | -------------
+dplyr  | [dplyr package](https://cran.r-project.org/web/packages/dplyr/dplyr.pdf) 
+pander  | [pander package](https://cran.r-project.org/web/packages/pander/pander.pdf) 
+ggplot2 | [ggplot2](https://cran.r-project.org/web/packages/ggplot2/ggplot2.pdf) 
+digest | [digest](https://cran.r-project.org/web/packages/digest/digest.pdf) 
+
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+#Load the required libraries
+library(dplyr)
+library(ggplot2)
+library(pander)
+library(digest)
+
+panderOptions("digits", 2)
+```
+
+# Data Processing
+The data for this assignment comes in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. It can be downloads the file from the course web site: Storm Data [47Mb](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2)
+
+There is also some documentation of the database available. Here you will find how some of the variables are constructed/defined. National Weather Service [Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+National Climatic Data Center Storm Events [FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+The events in the database start in the year 1950 and end in November 2011. In the earlier years of the database there are generally fewer events recorded, most likely due to a lack of good records. More recent years should be considered more complete.
+
+
+```{r cache=TRUE}
+## Set to the working location for the processing
+setwd("H:/Work/Workspaces/r-projects/coursera/RepData_Assignment2")
+
+if (!file.exists("./storm.data.csv.bz2")) {
+  download.file(url = "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",destfile = "./storm.data.csv.bz2")
+}
+
+#Load the data 
+storm.data <- read.csv(bzfile("./storm.data.csv.bz2"))  
+```
+
+The dataset downloaded had the following sha256 hash
+
+```{r echo=TRUE} 
+pander(
+  digest(
+    storm.data,
+    algo = "sha256",
+    serialize = TRUE,
+    file = FALSE,
+    length = Inf,
+    skip = "auto",
+    ascii = FALSE,
+    raw = FALSE,
+    seed = 0,
+    errormode = c("stop", "warn", "silent")
+  )
+)
+```
+
+### The data distribution
+
+The following histogram shows that the data is heavily skewed towards the more recent years, and if you look at the NOAA notes for the dataset much of the early data is keyed in and collected from paper sources, and only includes a small number of weather events.
+
+```{r echo=TRUE}
+hist(
+  as.numeric(format(
+    as.Date(storm.data$BGN_DATE, format = "%m/%d/%Y %H:%M:%S"),
+    "%Y"
+  )),
+  breaks = 60,
+  xlab = "Year",
+  main = "Data by Year"
+)
+```
+
+Cut the data prior to 1995 to avoid skewing the results, this is due to poor record keeping, several dry runs showed that this data skews towards tornados.  If the dry run is to be reproduced then this code chunk can be omitted.
+
+```{r echo=TRUE}
+storm.data <- storm.data[as.numeric(format(
+  as.Date(storm.data$BGN_DATE, format = "%m/%d/%Y %H:%M:%S"),
+  "%Y"
+)) >= 1995,]
+```
+
+#Assumptions
+
+The dataset also contains a number of different possible values of CROPDMGEXP and PROPDMGEXP and the units for these are not clearly documented.  The following treatment for the possible values.
+
+Possilbe values (H,h,K,k,M,m,B,b,+,-,?,0,1,2,3,4,5,6,7,8, and blank-character)
+
+Value | Unit | Multiplier
+------|------|-----------
+1-8 |tens     |10
+H,h |hundreds |100
+K,k |thousands|1,000
+M,m |millions|1,000,000
+B,b |billions|1,000,000,000
+
+*Note, All other values will be represented as a unit of 1.*
+
+```{r cache=TRUE, echo=TRUE}
+
+# Create a dataframe of all the lookup values
+lookup <- as.data.frame(rbind(
+  c("1", 10),
+  c("2", 10),
+  c("3", 10),
+  c("4", 10),
+  c("5", 10),
+  c("6", 10),
+  c("7", 10),
+  c("8", 10),
+  c("H", 100),
+  c("h", 100),
+  c("K", 1000),
+  c("k", 1000),
+  c("m", 1000000),
+  c("M", 1000000),
+  c("b", 1000000000),
+  c("B", 1000000000),
+  c("?", 1),
+  c("",  1),
+  c(" ", 1),
+  c("+", 1),
+  c("-", 1),
+  c("0", 1)
+))
+
+colnames(lookup) <- c("Exp", "Unit")
+lookup$Unit <- as.integer(as.character(lookup$Unit))
+
+
+## Lookup the values and add the units as an additional column
+storm.data$PROPU <- lookup$Unit[match(storm.data$PROPDMGEXP, lookup$Exp)]
+storm.data$CROPU <- lookup$Unit[match(storm.data$CROPDMGEXP, lookup$Exp)]
+
+## Add a total damage column in US $
+storm.data$TOTALDMG <-
+  (storm.data$PROPDMG * storm.data$PROPU) + 
+  (storm.data$CROPDMG * storm.data$CROPU)
+```
+
+# Results
+
+## Top weather events by deaths
+
+(Fig 1.) Bar plot showing the top weather events by deaths caused and acompanying dataset.
+
+```{r echo=TRUE}
+ggplot(
+  head(
+    storm.data %>% select(EVTYPE, FATALITIES) %>%
+      group_by(EVTYPE) %>%
+      summarise(TOTAL = sum(FATALITIES)) %>%
+      arrange(-TOTAL),
+    n = 10
+  ),
+  aes(EVTYPE, TOTAL)
+) +
+  geom_bar(stat = "identity", fill = "grey") +
+  ylab("Number of Fatalaties") +
+  xlab("") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r cache=TRUE, echo=TRUE}
+pander(
+  head(
+    storm.data %>% select(EVTYPE, FATALITIES) %>%
+      group_by(EVTYPE) %>%
+      summarise(TOTAL = sum(FATALITIES)) %>%
+      arrange(-TOTAL),
+    n = 10
+  ),
+  justify = 'left',
+  style = 'rmarkdown'
+)
+```
+
+## Top weather events by injuries
+
+(Fig 2.) Bar plot showing the top weather events by injuries caused and acompanying dataset.
+
+```{r echo=TRUE}
+ggplot(
+  head(
+    storm.data %>% select(EVTYPE, INJURIES) %>%
+      group_by(EVTYPE) %>%
+      summarise(TOTAL = sum(INJURIES)) %>%
+      arrange(-TOTAL),
+    n = 10
+  ),
+  aes(EVTYPE, TOTAL)
+) +
+  geom_bar(stat = "identity", fill = "grey") +
+  ylab("Number of Injuries") +
+  xlab("") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r cache=TRUE, echo=TRUE}
+pander(
+  head(
+    storm.data %>% select(EVTYPE, INJURIES) %>%
+      group_by(EVTYPE) %>%
+      summarise(TOTAL = sum(INJURIES)) %>%
+      arrange(-TOTAL),
+    n = 10
+  ),
+  justify = 'left',
+  style = 'rmarkdown'
+)
+```
+
+## Top weather events by economic impact
+
+(Fig 3.) Bar plot showing the top weather events by economic impact caused and acompanying dataset.
+
+```{r echo=TRUE}
+ggplot(
+  head(
+    storm.data %>% select(EVTYPE, TOTALDMG) %>%
+      group_by(EVTYPE) %>%
+      summarise(TOTAL = sum(TOTALDMG)) %>%
+      arrange(-TOTAL),
+    n = 10
+  ),
+  aes(EVTYPE, TOTAL)
+) +
+  geom_bar(stat = "identity", fill = "grey") +
+  ylab("Damage $USD Billions") +
+  xlab("") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r cache=TRUE, echo=TRUE}
+top.10 <- head(
+  storm.data %>% select(EVTYPE, TOTALDMG) %>%
+    group_by(EVTYPE) %>%
+    summarise(TOTAL = sum(TOTALDMG)) %>%
+    arrange(-TOTAL),
+  n = 10
+)
+
+top.10$TOTAL <- sprintf("$ %3.2f", (top.10$TOTAL/1000000000))
+
+pander(top.10,  justify = 'left',
+       style = 'rmarkdown')
+```
+
+
+# Appendix - Session Info Package Versions
+```{r echo=TRUE, message=FALSE}
+sessionInfo()
+```
